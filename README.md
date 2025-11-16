@@ -1,4 +1,4 @@
-# Arduino Snake Game - Complete Documentation & Installation Guide
+# Arduino Snake Game
 
 
 https://github.com/user-attachments/assets/cbdf2769-f31c-4b05-85ca-c10b7b460a7b
