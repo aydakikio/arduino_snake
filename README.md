@@ -1,9 +1,8 @@
 # Arduino Snake Game
 
-
-https://github.com/user-attachments/assets/cbdf2769-f31c-4b05-85ca-c10b7b460a7b
-
- 
+<p align="center">
+  <img src="./Assets/gameplay.gif" alt="animated" width="90%" height="90%" />
+</p>
 
 ## Overview
 
@@ -48,19 +47,9 @@ Push Buttons:
 5. Restart Arduino IDE
 
 ## Circuit Diagram
-
-```
-Arduino Uno/Nano          SH1106 OLED          Push Buttons
-    A4 ────────────────── SDA
-    A5 ────────────────── SCL
-    5V ────────────────── VCC
-   GND ────────────────── GND
-   
-   Pin 6 ──┤ ├── UP Button    ── GND
-   Pin 7 ──┤ ├── LEFT Button  ── GND  
-   Pin 9 ──┤ ├── DOWN Button  ── GND
-   Pin 10 ─┤ ├── RIGHT Button ── GND
-```
+<p align="center">
+  <img src="./Assets/wiring_diagram.png" alt="animated" width="80%" height="80%" />
+</p>
 
 ## Code Architecture
 
@@ -115,7 +104,7 @@ Growth Logic → Food Generation → Rendering → Repeat
 - **Smooth animation**: Consistent timing-based updates
 
 ## Installation Instructions
-![circut_diagram](./Assets/circut_diagram.png)
+
 ### Step 1: Hardware Assembly
 1. Connect the OLED display using I2C (SDA to A4, SCL to A5)
 2. Wire the four push buttons to pins 6, 7, 9, and 10
