@@ -1,70 +1,111 @@
 #include <U8g2lib.h>
+#include <EEPROM.h>
 
-U8G2_SH1106_128X64_NONAME_2_HW_I2C u8g2(U8G2_R0, -1, A5, A4);
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, -1, A5, A4);
 
-// Snake properties
-#define MAX_SNAKE_LENGTH 100
-#define GRID_SIZE 4
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
+// EEPROM addresses
+#define EEPROM_HIGH_SCORE_ADDR 0
+#define EEPROM_MAGIC_ADDR 2
+#define EEPROM_MAGIC_VALUE 42
+
+#define GRID_SIZE 6
+#define SCREEN_WIDTH 126  
+#define SCREEN_HEIGHT 54  
+
+// Max snake length 
+#define SNAKE_MAX 150
+
+// Store constant strings in PROGMEM (flash memory) to save RAM
+const char str_score[] PROGMEM = "Score:";
+const char str_best[] PROGMEM = "Best:";
+const char str_you_win[] PROGMEM = "YOU WIN!";
+const char str_max_length[] PROGMEM = "Max length!";
+const char str_game_over[] PROGMEM = "GAME OVER";
+const char str_new_high[] PROGMEM = "NEW HIGH SCORE!";
+const char str_press_btn[] PROGMEM = "Press any button..";
 
 struct Point {
-  int x, y;
+  int8_t x, y;
 };
 
-Point snake[MAX_SNAKE_LENGTH];
+Point snake[SNAKE_MAX];
 int snake_length = 3;
 Point food;
 
-// Directions: 0=right, 1=left, 2=up, 3=down
-int current_direction = 0;
-int next_direction = 0;
+int8_t current_direction = 0;
+int8_t next_direction = 0;
 bool is_direction_changed = false;
 
-// Game state
 int score = 0;
+int high_score = 0;
 bool game_over = false;
 bool food_eaten = false;
+bool new_high_score = false;
 
 // Button pins
 #define BTN_RIGHT 10
 #define BTN_DOWN 9
 #define BTN_LEFT 7
 #define BTN_UP 6
+#define BTN_RESET 4
 
-// Timing
 unsigned long last_move = 0;
-int game_speed = 600;  // milliseconds - much slower starting speed
+unsigned long last_input = 0;
+unsigned long last_draw = 0;
+int game_speed = 500;
+int min_speed = 100;
+
+#define INPUT_DEBOUNCE 50
+#define DRAW_INTERVAL 42  
+
+// Buffer for reading strings from PROGMEM
+char buffer[20];
+
+// Track if we need to redraw
+bool needs_redraw = true;
 
 void setup() {
   u8g2.begin();
-  Serial.begin(9500);
-  // Initialize button pins
+
   pinMode(BTN_RIGHT, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_LEFT, INPUT_PULLUP);
   pinMode(BTN_UP, INPUT_PULLUP);
+  pinMode(BTN_RESET, INPUT_PULLUP);
 
-  // Initialize snake at center of screen
-  snake[0].x = 32;  // Head
-  snake[0].y = 32;
-  snake[1].x = 28;  // Body
-  snake[1].y = 32;
-  snake[2].x = 24;  // Tail
-  snake[2].y = 32;
+  loadHighScore();
 
-  // Generate first food
+  snake[0].x = GRID_SIZE * 10;
+  snake[0].y = 8 + GRID_SIZE * 4;
+
+  snake[1].x = GRID_SIZE * 9;
+  snake[1].y = 8 + GRID_SIZE * 4;
+
+  snake[2].x = GRID_SIZE * 8;
+  snake[2].y = 8 + GRID_SIZE * 4;
   generateFood();
-
   randomSeed(analogRead(A0));
 }
 
 void loop() {
-  if (!game_over) {
-    handleInput();
+  unsigned long current_time = millis();
 
-    // Move snake based on timing
-    if (millis() - last_move > game_speed) {
+  if(digitalRead(BTN_RESET)==LOW){
+    resetHighScore();
+    needs_redraw = true;
+    delay(500);
+  }
+
+  if (!game_over) {
+    // Handle input with debouncing
+    if (current_time - last_input > INPUT_DEBOUNCE) {
+      if (handleInput()) {
+        last_input = current_time;
+      }
+    }
+    
+    // Move snake at game speed
+    if (current_time - last_move > game_speed) {
       moveSnake();
       checkCollisions();
       if (food_eaten) {
@@ -73,88 +114,103 @@ void loop() {
         food_eaten = false;
         score++;
 
-        // Speed up every 3 points, more noticeable progression
-        if (score % 3 == 0 && game_speed > 80) {
-          game_speed -= 20;  // Bigger speed jumps
+        if (score > high_score) {
+          high_score = score;
+          new_high_score = true;
+          saveHighScore();
+        }
+
+        // Speed progression
+        if (score % 5 == 0 && game_speed > min_speed) {
+          game_speed -= 15;
+          if (game_speed < min_speed) {
+            game_speed = min_speed;
+          }
+        }
+        
+        // Win - reached max length!
+        if (snake_length >= SNAKE_MAX) {
+          game_over = true;
         }
       }
-      last_move = millis();
+      needs_redraw = true;
+      last_move = current_time;
     }
 
-    drawGame();
+    // Draw at fixed frame rate
+    if (needs_redraw && (current_time - last_draw > DRAW_INTERVAL)) {
+      drawGame();
+      needs_redraw = false;
+      last_draw = current_time;
+    }
   } else {
-    drawGameOver();
+    // Draw game over screen at fixed rate
+    if (current_time - last_draw > DRAW_INTERVAL) {
+      drawGameOver();
+      last_draw = current_time;
+    }
 
-    // Reset game if any button is pressed
-    if (digitalRead(BTN_RIGHT) == HIGH || digitalRead(BTN_LEFT) == HIGH || digitalRead(BTN_UP) == HIGH || digitalRead(BTN_DOWN) == HIGH) {
+    if (digitalRead(BTN_RIGHT) == LOW || digitalRead(BTN_LEFT) == LOW || 
+      digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {
       resetGame();
-      delay(500);  // Debounce
+      needs_redraw = true;
+      delay(500);
     }
   }
 }
 
-void handleInput() {    Serial.println("RR");
-  int right_state = digitalRead(BTN_RIGHT);
-  int down_state = digitalRead(BTN_DOWN);
-  int left_state = digitalRead(BTN_LEFT);
-  int up_state = digitalRead(BTN_UP);
-
-  // Prevent reverse direction
-  if (right_state == LOW && current_direction != 1) {
+bool handleInput() {
+  bool input_detected = false;
+  
+  if (digitalRead(BTN_RIGHT) == LOW && current_direction != 1) {
     next_direction = 0;
     is_direction_changed = true;
+    input_detected = true;
   }
-  if (left_state == LOW && current_direction != 0) {
+  else if (digitalRead(BTN_LEFT) == LOW && current_direction != 0) {
     next_direction = 1;
     is_direction_changed = true;
+    input_detected = true;
   }
-  if (up_state == LOW && current_direction != 3) {
+  else if (digitalRead(BTN_UP) == LOW && current_direction != 3) {
     next_direction = 2;
     is_direction_changed = true;
+    input_detected = true;
   }
-  if (down_state == LOW && current_direction != 2) {
+  else if (digitalRead(BTN_DOWN) == LOW && current_direction != 2) {
     next_direction = 3;
     is_direction_changed = true;
+    input_detected = true;
   }
+  
+  return input_detected;
 }
 
 void moveSnake() {
-  // Update direction if changed
   if (is_direction_changed) {
     current_direction = next_direction;
     is_direction_changed = false;
   }
 
-  // Move body segments (from tail to head)
   for (int i = snake_length - 1; i > 0; i--) {
     snake[i] = snake[i - 1];
   }
 
-  // Move head based on direction
   switch (current_direction) {
-    case 0:  // Right
-      snake[0].x += GRID_SIZE;
-      break;
-    case 1:  // Left
-      snake[0].x -= GRID_SIZE;
-      break;
-    case 2:  // Up
-      snake[0].y -= GRID_SIZE;
-      break;
-    case 3:  // Down
-      snake[0].y += GRID_SIZE;
-      break;
+    case 0: snake[0].x += GRID_SIZE; break;
+    case 1: snake[0].x -= GRID_SIZE; break;
+    case 2: snake[0].y -= GRID_SIZE; break;
+    case 3: snake[0].y += GRID_SIZE; break;
   }
 }
 
 void checkCollisions() {
-  // Check wall collision
-  if (snake[0].x < 0 || snake[0].x >= SCREEN_WIDTH || snake[0].y < 8 || snake[0].y >= SCREEN_HEIGHT) {
+  if (snake[0].x < 0 || snake[0].x >= SCREEN_WIDTH || 
+      snake[0].y < 8 || snake[0].y >= SCREEN_HEIGHT + 8) {
     game_over = true;
     return;
   }
 
-  // Check self collision
   for (int i = 1; i < snake_length; i++) {
     if (snake[0].x == snake[i].x && snake[0].y == snake[i].y) {
       game_over = true;
@@ -162,29 +218,29 @@ void checkCollisions() {
     }
   }
 
-  // Check food collision
   if (snake[0].x == food.x && snake[0].y == food.y) {
     food_eaten = true;
   }
 }
 
 void growSnake() {
-  if (snake_length < MAX_SNAKE_LENGTH) {
-    // Add new segment at the tail
+  if (snake_length < SNAKE_MAX) {
     snake[snake_length] = snake[snake_length - 1];
     snake_length++;
   }
 }
 
 void generateFood() {
+  if (snake_length >= SNAKE_MAX) {
+    return;
+  }
+  
   bool valid_position = false;
 
   while (!valid_position) {
-    // Generate random position aligned to grid
     food.x = (random(0, SCREEN_WIDTH / GRID_SIZE)) * GRID_SIZE;
-    food.y = (random(2, SCREEN_HEIGHT / GRID_SIZE)) * GRID_SIZE;  // Avoid score area
+    food.y = 8 + (random(0, SCREEN_HEIGHT / GRID_SIZE)) * GRID_SIZE;
 
-    // Make sure food doesn't spawn on snake
     valid_position = true;
     for (int i = 0; i < snake_length; i++) {
       if (food.x == snake[i].x && food.y == snake[i].y) {
@@ -195,72 +251,116 @@ void generateFood() {
   }
 }
 
+void loadHighScore() {
+  byte magic = EEPROM.read(EEPROM_MAGIC_ADDR);
+  
+  if (magic != EEPROM_MAGIC_VALUE) {
+    high_score = 0;
+    EEPROM.write(EEPROM_MAGIC_ADDR, EEPROM_MAGIC_VALUE);
+    EEPROM.put(EEPROM_HIGH_SCORE_ADDR, high_score);
+  } else {
+    EEPROM.get(EEPROM_HIGH_SCORE_ADDR, high_score);
+  }
+}
+
+void saveHighScore() {
+  EEPROM.put(EEPROM_HIGH_SCORE_ADDR, high_score);
+}
+
+void resetHighScore() {
+  high_score = 0;
+  new_high_score = false;
+  EEPROM.put(EEPROM_HIGH_SCORE_ADDR, high_score);
+}
+
 void drawGame() {
-  u8g2.firstPage();
-  do {
-    // Draw score
-    u8g2.setFont(u8g2_font_5x7_mf);
-    u8g2.drawStr(0, 6, "Score:");
-    u8g2.setCursor(30, 6);
-    u8g2.print(score);
+  u8g2.clearBuffer();
+  
+  u8g2.setFont(u8g2_font_5x7_mf);
+  
+  // Read strings from PROGMEM and draw
+  strcpy_P(buffer, str_score);
+  u8g2.drawStr(0, 6, buffer);
+  u8g2.setCursor(30, 6);
+  u8g2.print(score);
+  
+  strcpy_P(buffer, str_best);
+  u8g2.drawStr(70, 6, buffer);
+  u8g2.setCursor(95, 6);
+  u8g2.print(high_score);
 
-    // Draw snake
-    for (int i = 0; i < snake_length; i++) {
-      if (i == 0) {
-        // Draw head slightly different (filled circle)
-        u8g2.drawBox(snake[i].x, snake[i].y, GRID_SIZE, GRID_SIZE);
-      } else {
-        // Draw body segments
-        u8g2.drawFrame(snake[i].x, snake[i].y, GRID_SIZE, GRID_SIZE);
-      }
+  for (int i = 0; i < snake_length; i++) {
+    if (i == 0) {
+      u8g2.drawBox(snake[i].x, snake[i].y, GRID_SIZE, GRID_SIZE);
+    } else {
+      u8g2.drawFrame(snake[i].x, snake[i].y, GRID_SIZE, GRID_SIZE);
     }
+  }
 
-    // Draw food (small filled circle)
+  if (snake_length < SNAKE_MAX) {
     u8g2.drawBox(food.x + 1, food.y + 1, GRID_SIZE - 2, GRID_SIZE - 2);
-
-    // Draw border
-    u8g2.drawFrame(0, 8, SCREEN_WIDTH, SCREEN_HEIGHT - 8);
-
-  } while (u8g2.nextPage());
+  }
+  
+  u8g2.drawFrame(0, 8, SCREEN_WIDTH, SCREEN_HEIGHT);
+  
+  u8g2.sendBuffer();
 }
 
 void drawGameOver() {
-  u8g2.firstPage();
-  do {
-    u8g2.setFont(u8g2_font_7x13_mf);
-
-    // Center text
-    u8g2.drawStr(25, 25, "GAME OVER");
-
+  u8g2.clearBuffer();
+  
+  u8g2.setFont(u8g2_font_7x13_mf);
+  
+  if (snake_length >= SNAKE_MAX) {
+    strcpy_P(buffer, str_you_win);
+    u8g2.drawStr(30, 20, buffer);
+    
     u8g2.setFont(u8g2_font_5x7_mf);
-    u8g2.drawStr(35, 40, "Score:");
-    u8g2.setCursor(65, 40);
-    u8g2.print(score);
+    strcpy_P(buffer, str_max_length);
+    u8g2.drawStr(25, 30, buffer);
+  } else {
+    strcpy_P(buffer, str_game_over);
+    u8g2.drawStr(25, 20, buffer);
+  }
 
-    u8g2.drawStr(25, 55, "Press any key");
-
-  } while (u8g2.nextPage());
+  u8g2.setFont(u8g2_font_5x7_mf);
+  
+  if (new_high_score) {
+    strcpy_P(buffer, str_new_high);
+    u8g2.drawStr(15, 42, buffer);
+  }
+  
+  strcpy_P(buffer, str_score);
+  u8g2.drawStr(36, 52, buffer);
+  u8g2.setCursor(71, 52);
+  u8g2.print(score);
+  
+  strcpy_P(buffer, str_press_btn);
+  u8g2.drawStr(20 , 62 , buffer);
+  
+  u8g2.sendBuffer();
 }
 
 void resetGame() {
-  // Reset snake
   snake_length = 3;
-  snake[0].x = 32;
-  snake[0].y = 32;
-  snake[1].x = 28;
-  snake[1].y = 32;
-  snake[2].x = 24;
-  snake[2].y = 32;
 
-  // Reset game state
+  snake[0].x = GRID_SIZE * 10;
+  snake[0].y = 8 + GRID_SIZE * 4;
+
+  snake[1].x = GRID_SIZE * 9;
+  snake[1].y = 8 + GRID_SIZE * 4;
+
+  snake[2].x = GRID_SIZE * 8;
+  snake[2].y = 8 + GRID_SIZE * 4;
+
   current_direction = 0;
   next_direction = 0;
   is_direction_changed = false;
   score = 0;
   game_over = false;
   food_eaten = false;
-  game_speed = 600;  // Reset to slower starting speed
+  game_speed = 500;
+  new_high_score = false;
 
-  // Generate new food
   generateFood();
 }
